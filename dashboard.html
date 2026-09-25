@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>DJ Paneli</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+
+  <div id="loginView" class="card" style="display:none;">
+    <h1>🔐 Panel Girişi</h1>
+    <input id="password" type="password" placeholder="Yönetici şifresi" />
+    <button id="loginBtn">Giriş yap</button>
+    <div class="error-msg" id="loginError"></div>
+  </div>
+
+  <div id="panelView" style="display:none;">
+    <h1>🎧 DJ Paneli</h1>
+    <p class="sub">İstekler oy sayısına göre sıralanır. Yeni istek geldiğinde liste otomatik güncellenir.</p>
+
+    <div class="card">
+      <strong>QR Kod</strong>
+      <p class="sub" style="margin-top:4px;">Bu kodu masalara / mekana yazdır, müşteriler okutunca istek sayfası açılır.</p>
+      <div style="text-align:center;">
+        <img id="qrImg" alt="QR kod" style="max-width:200px; border-radius:12px; background:white; padding:8px;" />
+      </div>
+      <p class="sub" id="qrUrl" style="word-break: break-all; text-align:center;"></p>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content: space-between; align-items:center;">
+        <strong>İstek Kuyruğu</strong>
+        <button class="secondary" id="clearPlayedBtn" style="width:auto; padding:8px 12px;">Çalınanları temizle</button>
+      </div>
+      <div id="list"></div>
+    </div>
+
+    <button class="secondary" id="logoutBtn">Çıkış yap</button>
+  </div>
+
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const loginView = document.getElementById('loginView');
+const panelView = document.getElementById('panelView');
+const listEl = document.getElementById('list');
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function checkSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+  if (data.isAdmin) {
+    loginView.style.display = 'none';
+    panelView.style.display = 'block';
+    initPanel();
+  } else {
+    loginView.style.display = 'block';
+    panelView.style.display = 'none';
+  }
+}
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const password = document.getElementById('password').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (res.ok) {
+    checkSession();
+  } else {
+    errEl.textContent = 'Şifre yanlış';
+  }
+});
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  checkSession();
+});
+
+let socket;
+function initPanel() {
+  const qrUrl = location.origin + '/';
+  document.getElementById('qrUrl').textContent = qrUrl;
+  document.getElementById('qrImg').src =
+    'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(qrUrl);
+
+  if (!socket) {
+    socket = io();
+    socket.on('requests:update', render);
+  }
+  fetch('/api/requests').then(r => r.json()).then(render);
+
+  document.getElementById('clearPlayedBtn').addEventListener('click', async () => {
+    await fetch('/api/requests/clear-played', { method: 'POST' });
+  });
+}
+
+function render(items) {
+  if (items.length === 0) {
+    listEl.innerHTML = '<div class="empty">Henüz istek yok.</div>';
+    return;
+  }
+  listEl.innerHTML = items.map(r => `
+    <div class="request-item ${r.status === 'played' ? 'played' : ''}">
+      <div class="request-info">
+        <div class="song-title">${escapeHtml(r.song)} <span class="badge">👍 ${r.votes}</span></div>
+        <div class="song-artist">${escapeHtml(r.artist || '')}</div>
+        <div class="song-meta">
+          ${r.requester ? escapeHtml(r.requester) : 'İsimsiz'}${r.table ? ' · Masa ' + escapeHtml(r.table) : ''}
+        </div>
+      </div>
+      <div class="row">
+        ${r.status === 'pending'
+          ? `<button class="secondary" data-action="played" data-id="${r.id}" style="width:auto; padding:8px 12px;">Çalındı</button>`
+          : `<button class="secondary" data-action="pending" data-id="${r.id}" style="width:auto; padding:8px 12px;">Geri al</button>`
+        }
+        <button class="danger" data-action="delete" data-id="${r.id}" style="width:auto; padding:8px 12px;">Sil</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+listEl.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const { action, id } = btn.dataset;
+  if (action === 'delete') {
+    if (!confirm('Bu istek silinsin mi?')) return;
+    await fetch(`/api/requests/${id}`, { method: 'DELETE' });
+  } else {
+    await fetch(`/api/requests/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: action }),
+    });
+  }
+});
+
+checkSession();
+</script>
+</body>
+</html>

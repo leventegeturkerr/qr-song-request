@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Şarkı İste 🎶</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <h1>🎶 Şarkı İste</h1>
+  <p class="sub">Aklındaki şarkıyı yaz, DJ/grup görsün. Zaten listede olan bir şarkıyı görüyorsan onu +1'leyebilirsin.</p>
+
+  <div class="card">
+    <form id="requestForm">
+      <label for="song">Şarkı adı *</label>
+      <input id="song" name="song" placeholder="Örn: Dorothy - Athena" required maxlength="80" />
+
+      <label for="artist">Sanatçı (opsiyonel)</label>
+      <input id="artist" name="artist" placeholder="Örn: Athena" maxlength="60" />
+
+      <label for="requester">Adın (opsiyonel)</label>
+      <input id="requester" name="requester" placeholder="Örn: Ayşe" maxlength="40" />
+
+      <label for="table">Masa no (opsiyonel)</label>
+      <input id="table" name="table" placeholder="Örn: 12" maxlength="20" />
+
+      <button type="submit">İsteği Gönder</button>
+      <div class="error-msg" id="formError"></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <strong>Şu an listede olanlar</strong>
+    <div id="list"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast">İstek gönderildi!</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+const listEl = document.getElementById('list');
+const form = document.getElementById('requestForm');
+const errEl = document.getElementById('formError');
+const toast = document.getElementById('toast');
+
+const params = new URLSearchParams(location.search);
+const tableFromQR = params.get('masa') || params.get('table');
+if (tableFromQR) document.getElementById('table').value = tableFromQR;
+
+// bu cihazın oy verdiği istekleri hatırlamak için (görsel geri bildirim)
+const votedLocally = new Set(JSON.parse(localStorage.getItem('votedIds') || '[]'));
+function rememberVote(id) {
+  votedLocally.add(id);
+  localStorage.setItem('votedIds', JSON.stringify([...votedLocally]));
+}
+
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2200);
+}
+
+function render(items) {
+  const pending = items.filter(r => r.status === 'pending');
+  if (pending.length === 0) {
+    listEl.innerHTML = '<div class="empty">Henüz istek yok, ilk isteği sen gönder!</div>';
+    return;
+  }
+  listEl.innerHTML = pending.map(r => `
+    <div class="request-item">
+      <div class="request-info">
+        <div class="song-title">${escapeHtml(r.song)}</div>
+        <div class="song-artist">${escapeHtml(r.artist || '')}</div>
+      </div>
+      <button class="vote-btn" data-id="${r.id}" ${votedLocally.has(r.id) ? 'disabled' : ''}>
+        👍 ${r.votes}
+      </button>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+listEl.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.vote-btn');
+  if (!btn || btn.disabled) return;
+  const id = btn.dataset.id;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/requests/${id}/vote`, { method: 'POST' });
+    if (res.ok) {
+      rememberVote(id);
+      showToast('Oyun eklendi!');
+    } else {
+      btn.disabled = false;
+    }
+  } catch {
+    btn.disabled = false;
+  }
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errEl.textContent = '';
+  const payload = {
+    song: document.getElementById('song').value,
+    artist: document.getElementById('artist').value,
+    requester: document.getElementById('requester').value,
+    table: document.getElementById('table').value,
+  };
+  try {
+    const res = await fetch('/api/requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || 'Bir şeyler ters gitti';
+      return;
+    }
+    rememberVote(data.id);
+    document.getElementById('song').value = '';
+    document.getElementById('artist').value = '';
+    showToast('İstek gönderildi! 🎉');
+  } catch {
+    errEl.textContent = 'Sunucuya ulaşılamadı';
+  }
+});
+
+socket.on('requests:update', render);
+fetch('/api/requests').then(r => r.json()).then(render);
+</script>
+</body>
+</html>
